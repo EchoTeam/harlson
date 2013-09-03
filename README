@@ -1,0 +1,3 @@
+To profile:
+
+./dist/build/rl2/rl2 +RTS -p

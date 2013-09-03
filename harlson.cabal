@@ -1,0 +1,21 @@
+Name:                harlson
+Version:             1.0
+Synopsis:            Rate Limit Server
+Description:         Rate Limit Server
+License:             AllRightsReserved
+License-file:        LICENSE
+Author:              Jacknyfe inc.
+Maintainer:          Alexander Ovchinnikov <aovchinn@aboutecho.com>
+Build-Type:          Simple
+Cabal-version:       >= 1.2
+
+Executable harlson
+    Main-is:             Main.hs
+    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, containers >= 0.5.0.0, binary, bytestring
+    ghc-options:         -O3 -threaded -rtsopts -auto-all
+
+Executable perf-harlson
+    Main-is:             Perftest.hs
+    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, containers >= 0.5.0.0, binary, bytestring
+    ghc-options:         -O3 -threaded -rtsopts
+
