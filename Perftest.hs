@@ -1,7 +1,8 @@
 import Network.Socket
 import Network.BSD
 import Control.Monad
-import Control.Concurrent
+import Control.Concurrent hiding (forkFinally)
+import Control.Concurrent.MVar
 import Control.Exception
 import System.IO
 import qualified Data.Binary.Put as Put
