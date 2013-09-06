@@ -9,6 +9,7 @@ import qualified Data.Binary.Get as Get
 import Network.Socket
 import Network.BSD
 import System.IO
+import Control.Exception
 import Data.Time.Clock
 import Data.Word
 import System.Exit
@@ -58,8 +59,14 @@ main = do
     let queryProcessor = processQuery ystate
     forkIO $ mavgUpdater ystate
     forkIO $ serveTCP "1813" (handler queryProcessor)
+    forkIO $ waitPortClose mvExit
     exitCode <- takeMVar mvExit
     print exitCode
+
+waitPortClose mvExit = do
+    hSetBuffering stdin NoBuffering
+    r <- try getChar :: IO (Either IOError Char)
+    putMVar mvExit 0
 
 mavgUpdater :: YState -> IO ()
 mavgUpdater ystate = do
