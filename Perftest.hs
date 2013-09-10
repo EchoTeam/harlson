@@ -14,7 +14,7 @@ import Query
 main = do
     runJob 1 (updateMetrics 10000)
     runJob 1 updateLimits
-    vars <- sequence $ replicate 300 $ myForkIO $ runJob 1 (updateMetrics 2000)
+    vars <- replicateM 300 $ myForkIO $ runJob 1 (updateMetrics 2000)
     mapM_ takeMVar vars
     print "Done put"
     runJob 10 getOverLimit
@@ -22,11 +22,11 @@ main = do
 
 runJob n job = do
     h <- newConnHandle
-    sequence_ $ replicate n $ job h
+    replicateM_ n $ job h
     hClose h
 
 metrics :: [QMetric]
-metrics = [QMetric (B8.pack $ "a@dev.washpost.com" ++ (show x)) (B8.pack "submit") (B8.pack "level1") 10 | x <- [1..]]
+metrics = [QMetric (B8.pack $ "a@dev.washpost.com" ++ show x) (B8.pack "submit") (B8.pack "level1") 10 | x <- [1..]]
 
 updateMetrics :: Int -> Handle ->IO ()
 updateMetrics m h = do
@@ -45,19 +45,15 @@ getOverLimit h = do
     threadDelay 1000000
 
 stop :: Handle -> IO ()
-stop h = do
-    writeQuery h Stop
+stop h = writeQuery h Stop
 
 newConnHandle :: IO Handle
 newConnHandle = do
     addrinfos <- getAddrInfo Nothing (Just "127.0.0.1") (Just "1813")
     let serveraddr = head addrinfos
     sock <- socket (addrFamily serveraddr) Stream defaultProtocol
-    --setSocketOption sock NoDelay 1
     connect sock (addrAddress serveraddr)
-    h <- socketToHandle sock ReadWriteMode
-    --hSetBuffering h NoBuffering --(BlockBuffering Nothing)
-    return h
+    socketToHandle sock ReadWriteMode
 
 myForkIO :: IO () -> IO (MVar ())
 myForkIO io = do

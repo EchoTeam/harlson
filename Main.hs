@@ -78,8 +78,8 @@ mavgUpdater ystate = do
     mapM_ (\(k@(Key _ ep), m)  -> do
         mavg <- readMVar (mMavg m)
         (c, lvl) <- modifyMVar (mData m) (\(MData c lvl) -> return $! (MData 0 lvl, (c, lvl)))
-        let mavg' = bump_rate mavg now c
-        let ra = rate_average mavg'
+        let mavg' = bumpRate mavg now c
+        let ra = rateAverage mavg'
         modifyMVar_ (sOverLimits ystate) (\overLimits -> do
             let limit = (Map.findWithDefault 2000000000 (LKey lvl ep) limits)
             if ra > limit
@@ -112,7 +112,7 @@ processQuery ystate h Stop = putMVar (sExit ystate) 0
 updateMetric :: MVar MetricsMap -> Handle -> QMetric -> IO ()
 updateMetric mvMetrics h (QMetric key ep lvl cnt) = do
     let k = Key key ep
-    metric <- modifyMVar mvMetrics (\metrics -> do
+    metric <- modifyMVar mvMetrics (\metrics ->
         case Map.lookup k metrics of
             Just m -> return $! (metrics, m)
             Nothing -> do
@@ -122,7 +122,7 @@ updateMetric mvMetrics h (QMetric key ep lvl cnt) = do
 
 newMetric :: IO Metric
 newMetric = do
-    mavg <- mavg_new_io 60.0
+    mavg <- mavgNewIO 60.0
     ma <- newMVar mavg
     mc <- newMVar (MData 0 B.empty)
     return $ Metric ma mc

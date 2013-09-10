@@ -15,8 +15,8 @@ data Mavg = Mavg
 instance Show Mavg where
     show m = show (historicAvg m, rateAverage m)
 
-mavg_new :: Double -> UTCTime -> Mavg
-mavg_new smoothing_window now = do
+mavgNew :: Double -> UTCTime -> Mavg
+mavgNew smoothing_window now =
     Mavg 
         { historicAvg = 0.0
         , period = smoothing_window
@@ -24,19 +24,19 @@ mavg_new smoothing_window now = do
         , rateAverage = 0
         }
 
-mavg_new_io :: Double -> IO Mavg
-mavg_new_io smoothing_window = do
+mavgNewIO :: Double -> IO Mavg
+mavgNewIO smoothing_window = do
     ts <- getCurrentTime 
-    return $ Mavg 
+    return Mavg 
         { historicAvg = 0.0
         , period = smoothing_window
         , lastUpdateTS = ts
         , rateAverage = 0
         }
 
-bump_rate :: Mavg -> UTCTime -> Int -> Mavg 
-bump_rate m now n =
-    m { historicAvg = ((exp (-1.0 / p)) * (h - ur) + ur) * (exp ((1.0 - elapsed) / p))
+bumpRate :: Mavg -> UTCTime -> Int -> Mavg 
+bumpRate m now n =
+    m { historicAvg = (exp (-1.0 / p) * (h - ur) + ur) * exp ((1.0 - elapsed) / p)
       , lastUpdateTS = now
       , rateAverage = round (h * p)
       }
@@ -46,8 +46,8 @@ bump_rate m now n =
         p = period m
         elapsed = realToFrac $ diffUTCTime now (lastUpdateTS m)
 
-bump_value :: Mavg -> UTCTime -> Double -> Mavg
-bump_value m now value =
+bumpValue :: Mavg -> UTCTime -> Double -> Mavg
+bumpValue m now value =
     m { historicAvg = (a * value) + (e * h)
       , lastUpdateTS = now
       }
@@ -58,22 +58,19 @@ bump_value m now value =
         e = exp (-elapsed / p)
         a = 1.0 - e
 
-value_average :: Mavg -> Double
-value_average = historicAvg
+valueAverage :: Mavg -> Double
+valueAverage = historicAvg
 
-rate_average :: Mavg -> Int
-rate_average = rateAverage
-
-needs_update :: Mavg -> UTCTime -> Bool
-needs_update m now =
-    1.0 <= (realToFrac $ diffUTCTime now (lastUpdateTS m))
+needsUpdate :: Mavg -> UTCTime -> Bool
+needsUpdate m now =
+    1.0 <= realToFrac (diffUTCTime now (lastUpdateTS m))
 
 test = do
-    m0 <- mavg_new_io 6.0
+    m0 <- mavgNewIO 6.0
     t0 <- getCurrentTime
-    let m1 = bump_value m0 t0 10
+    let m1 = bumpValue m0 t0 10
     threadDelay 10000000
     t1 <- getCurrentTime
-    let m2 = bump_value m1 t1 11
-    print $ value_average m2
+    let m2 = bumpValue m1 t1 11
+    print $ valueAverage m2
     print m2
