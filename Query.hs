@@ -5,39 +5,42 @@ import qualified Data.ByteString.Lazy.Char8 as B8
 import qualified Data.Binary.Put as Put
 import qualified Data.Binary.Get as Get
 import System.IO
+import Debug.Trace
+import Control.Applicative
+import Control.Exception
 import Control.Monad
 
-data QMetric = QMetric { qmKey :: B.ByteString
-                       , qmEndpoint :: B.ByteString
-                       , qmLevel :: B.ByteString
-                       , qmCount :: Int
+data QMetric = QMetric { qmKey :: !B.ByteString
+                       , qmEndpoint :: !B.ByteString
+                       , qmLevel :: !B.ByteString
+                       , qmCount :: !Int
                        } deriving Show
 
-data QLimit = QLimit { qlLevel :: B.ByteString
-                     , qlEndpoint :: B.ByteString
-                     , qlLimit :: Int
+data QLimit = QLimit { qlLevel :: !B.ByteString
+                     , qlEndpoint :: !B.ByteString
+                     , qlLimit :: !Int
                      } deriving Show
 
-data ROverLimit = ROverLimit { roKey :: B.ByteString
-                             , roEndpoint :: B.ByteString
-                             , roOverLimitChange :: OverLimitChange
+data ROverLimit = ROverLimit { roKey :: !B.ByteString
+                             , roEndpoint :: !B.ByteString
+                             , roOverLimitChange :: !OverLimitChange
                              } deriving Show
 
-data OverLimitChange = OverLimitAdded { roValue :: Int
-                                      , roThrottle :: Int -- as a permille
+data OverLimitChange = OverLimitAdded { roValue :: !Int
+                                      , roThrottle :: !Int -- as a permille
                                       }
                      | OverLimitRemoved
                         deriving Show
 
-data Query = UpdateMetrics [QMetric]
-           | UpdateLimits [QLimit]
+data Query = UpdateMetrics ![QMetric]
+           | UpdateLimits ![QLimit]
            | GetOverLimit
            | OverLimitUpdates
            | Stop
                 deriving Show
 
-data Reply = ReplyOverLimit [ROverLimit]
-           | ReplyOverLimitUpdate ROverLimit
+data Reply = ReplyOverLimit ![ROverLimit]
+           | ReplyOverLimitUpdate !ROverLimit
                 deriving Show
 
 readQuery :: Handle -> IO Query
@@ -186,3 +189,86 @@ writeShort :: (Integral a) => Handle -> a -> IO ()
 writeShort h n = do
     let bin = Put.runPut $ Put.putWord8 $ fromIntegral n
     B.hPut h bin
+
+
+---
+
+bsToQueries :: B.ByteString -> [Query]
+bsToQueries = Get.runGet (getQueries [])
+ 
+getQueries :: [Query] -> Get.Get [Query]
+getQueries acc = do
+    isEmp <- Get.isEmpty
+    if isEmp then return acc else 
+        do
+            q <- getQuery
+            case q of
+                Just query -> getQueries (query:acc)
+                Nothing -> getQueries acc
+
+getQuery :: Get.Get (Maybe Query)
+getQuery = do
+    code <- Get.getLazyByteString 4
+    case B8.unpack code of
+        "UPME" -> Just <$> UpdateMetrics <$> getMetrics
+        "UPLI" -> Just <$> UpdateLimits <$> getLimits
+        "GOVL" -> return $ Just GetOverLimit
+        "OVLU" -> return $ Just OverLimitUpdates
+        "STOP" -> return $ Just Stop
+        "\0\0\0\0" -> 
+                  return Nothing
+        _      -> error ("Bad query type: " ++ show code)
+
+getMetrics :: Get.Get [QMetric]
+getMetrics = do
+    length <- getWord32
+    replicateM length getMetric
+
+getMetric :: Get.Get QMetric
+getMetric = QMetric <$> getStr <*> getStr <*> getStr <*> getWord32
+
+getLimits :: Get.Get [QLimit]
+getLimits = do
+    length <- getWord32
+    replicateM length getLimit
+
+getLimit :: Get.Get QLimit
+getLimit = QLimit <$> getStr <*> getStr <*> getWord32
+-- Special
+
+getWord8 :: Get.Get Int
+getWord8 = fromIntegral <$> Get.getWord8
+
+getWord32 :: Get.Get Int
+getWord32 = fromIntegral <$> Get.getWord32be
+
+getStr :: Get.Get B.ByteString
+getStr = do 
+    length <- getWord8
+    Get.getLazyByteString $ fromIntegral length
+
+--
+putReply (ReplyOverLimit list) = do
+    Put.putLazyByteString $ B8.pack "ROVL"
+    putWord32 $ length list
+    mapM putReplyOverLimit list
+    return ()
+
+putReplyOverLimit (ROverLimit key endpoint change) = do
+    putBStr key
+    putBStr endpoint
+    case change of
+        (OverLimitAdded value trottle) -> do
+            putWord8 0
+            putWord32 value
+            putWord32 trottle
+        OverLimitRemoved ->
+            putWord8 1
+    
+
+putWord32 = Put.putWord32be . fromIntegral
+putWord8  = Put.putWord8 . fromIntegral
+putBStr bs = do
+    putWord8 $ B.length bs
+    Put.putLazyByteString bs
+

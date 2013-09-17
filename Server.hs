@@ -3,14 +3,10 @@ module Server (serveTCP, HandlerFunc) where
 
 -- Code based on the "Real World Haskell" book
 
-import Data.Bits
-import Network.Socket
-import Network.BSD
-import Data.List
 import Control.Concurrent
-import System.IO
+import Network.Socket
 
-type HandlerFunc = SockAddr -> Handle -> IO ()
+type HandlerFunc = SockAddr -> Socket -> IO ()
 
 serveTCP :: String -> HandlerFunc -> IO ()
 serveTCP port handler = withSocketsDo $
@@ -34,8 +30,7 @@ serveTCP port handler = withSocketsDo $
 
     procMessages :: Socket -> SockAddr -> IO ()
     procMessages connsock clientaddr = do
-      connhdl <- socketToHandle connsock ReadWriteMode
       --hSetBuffering connhdl NoBuffering --(BlockBuffering Nothing)
-      handler clientaddr connhdl
-      hClose connhdl
+      handler clientaddr connsock
+      sClose connsock
 

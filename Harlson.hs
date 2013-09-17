@@ -4,13 +4,16 @@ import Network.Socket
 import Network.BSD
 
 import Control.Exception
+import Control.Monad
+import Control.Applicative
 import Control.Concurrent
 import Control.Concurrent.MVar
 
 import Data.Time.Clock
 import Data.Word
 import Data.Maybe
-import qualified Data.Map as Map
+import qualified Network.Socket.ByteString.Lazy as NB
+import qualified Data.Map.Strict as Map
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Binary.Put as Put
 import qualified Data.Binary.Get as Get
@@ -98,29 +101,39 @@ mavgUpdater ystate = do
         swapMVar (mMavg m) $! mavg') ms
     mavgUpdater ystate
 
-handler :: (Handle -> Query -> IO ()) -> SockAddr -> Handle -> IO ()
-handler qp sa h = do
-    isEof <- hIsEOF h
-    if isEof
-        then hClose h
-        else readQuery h >>= qp h >> handler qp sa h
+handler :: (Query -> IO (Put.Put)) -> SockAddr -> Socket -> IO ()
+handler qp sa sock = do
+    binary <- NB.getContents sock :: IO B.ByteString
+    -- puts <- mapM qp $ bsToQueries binary
+    -- let answer = Put.runPut $ sequence_ puts
+    -- NB.send sock answer
+    forM_ (bsToQueries binary) $ \query -> do
+        answer <- qp query        
+        NB.send sock $ Put.runPut answer
+    return ()
 
-processQuery :: YState -> Handle -> Query -> IO ()
-processQuery ystate h (UpdateMetrics qms) = mapM_ (updateMetric (sMetrics ystate) h) qms
-processQuery ystate h GetOverLimit = do
+processQuery :: YState -> Query -> IO (Put.Put)
+processQuery ystate (UpdateMetrics qms) = do
+    mapM_ (updateMetric (sMetrics ystate)) qms
+    return Put.flush
+processQuery ystate GetOverLimit = do
     let mvOverLimits = sOverLimits ystate
     overLimitsMap <- readMVar mvOverLimits
-    let os = Map.toList overLimitsMap
-    writeReply h $ ReplyOverLimit [ROverLimit k e (OverLimitAdded val thr) | (Key k e, OverLimit val thr) <- os]
-processQuery ystate h (UpdateLimits qls) = do
+    let os  = Map.toList overLimitsMap
+    let ans = ReplyOverLimit [ROverLimit k e (OverLimitAdded val thr) | (Key k e, OverLimit val thr) <- os]
+    return $ putReply ans
+processQuery ystate (UpdateLimits qls) = do
     let mvLimits = sLimits ystate
     modifyMVar_ mvLimits (\limits -> do
         let limits' = Map.fromList [(LKey lvl ep, lim) | (QLimit lvl ep lim) <- qls]
         return limits')
-processQuery ystate h Stop = putMVar (sExit ystate) 0
+    return Put.flush
+processQuery ystate Stop = do
+    putMVar (sExit ystate) 0
+    return Put.flush
 
-updateMetric :: MVar MetricsMap -> Handle -> QMetric -> IO ()
-updateMetric mvMetrics h (QMetric key ep lvl cnt) = do
+updateMetric :: MVar MetricsMap -> QMetric -> IO ()
+updateMetric mvMetrics (QMetric key ep lvl cnt) = do
     let k = Key key ep
     metric <- modifyMVar mvMetrics (\metrics ->
         case Map.lookup k metrics of
