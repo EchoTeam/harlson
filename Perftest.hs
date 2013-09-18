@@ -61,8 +61,3 @@ myForkIO io = do
     forkFinally io (\_ -> putMVar mvar ())
     return mvar
 
-forkFinally :: IO a -> (Either SomeException a -> IO ()) -> IO ThreadId
-forkFinally action and_then =
-   mask $ \restore ->
-     forkIO $ try (restore action) >>= and_then
-
