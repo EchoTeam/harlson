@@ -93,7 +93,11 @@ mavgUpdater ystate = do
         modifyMVar_ (sOverLimits ystate) (\overLimits -> do
             let limit = (Map.findWithDefault 2000000000 (LKey lvl ep) limits)
             if ra > limit
-                then return $! Map.insert k (OverLimit ra (1000 * limit `div` ra)) overLimits
+                then do
+                    let limit_l = fromIntegral limit :: Integer
+                    let ra_l = fromIntegral ra :: Integer
+                    let p = fromIntegral (1000000 * limit_l `div` ra_l)
+                    return $! Map.insert k (OverLimit ra p) overLimits
                 else return $! Map.delete k overLimits)
         swapMVar (mMavg m) $! mavg') ms
     mavgUpdater ystate
