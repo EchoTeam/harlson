@@ -9,11 +9,13 @@ data Mode = StandaloneMode | ErlangPortMode
 data Options = Options
     { optPort       :: String
     , optMode       :: Mode
+    , optSmoothing :: Double
     } deriving Show
 
 defaultOptions = Options
     { optPort = "1813"
     , optMode = StandaloneMode
+    , optSmoothing = 60.0
     }
 
 modeOfString :: String -> Mode
@@ -29,6 +31,9 @@ options =
     , Option ['m'] ["mode"]
         (OptArg (optArg $ \opts m -> opts {optMode = modeOfString m}) "MODE")
         "Operational mode: erlangport | standalone (default)"
+    , Option ['s'] ["smoothing"]
+        (OptArg (optArg $ \opts s -> opts {optSmoothing = read s}) "SMOOTHING-WINDOW")
+        "Smoothing window, secs (defaults to 60.0)"
     ] where optArg f a opts = maybe opts (\m -> f opts m) a
 
 progOpts :: IO Options

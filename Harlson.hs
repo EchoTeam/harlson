@@ -61,7 +61,7 @@ runHarlson opts = do
     mvLimits <- newMVar Map.empty
     mvExit <- newEmptyMVar
     let ystate = YState mvMetrics mvOverLimits mvLimits mvExit
-    let queryProcessor = processQuery ystate
+    let queryProcessor = processQuery opts ystate
     forkIO $ mavgUpdater ystate
     forkIO $ serveTCP (optPort opts) (handler queryProcessor)
     case optMode opts of
@@ -109,34 +109,34 @@ handler qp sa h = do
         then hClose h
         else readQuery h >>= qp h >> handler qp sa h
 
-processQuery :: YState -> Handle -> Query -> IO ()
-processQuery ystate h (UpdateMetrics qms) = mapM_ (updateMetric (sMetrics ystate) h) qms
-processQuery ystate h GetOverLimit = do
+processQuery :: Options -> YState -> Handle -> Query -> IO ()
+processQuery opts ystate h (UpdateMetrics qms) = mapM_ (updateMetric (optSmoothing opts) (sMetrics ystate) h) qms
+processQuery opts ystate h GetOverLimit = do
     let mvOverLimits = sOverLimits ystate
     overLimitsMap <- readMVar mvOverLimits
     let os = Map.toList overLimitsMap
     writeReply h $ ReplyOverLimit [ROverLimit k e (OverLimitAdded val thr) | (Key k e, OverLimit val thr) <- os]
-processQuery ystate h (UpdateLimits qls) = do
+processQuery opts ystate h (UpdateLimits qls) = do
     let mvLimits = sLimits ystate
     modifyMVar_ mvLimits (\limits -> do
         let limits' = Map.fromList [(LKey lvl ep, lim) | (QLimit lvl ep lim) <- qls]
         return limits')
-processQuery ystate h Stop = putMVar (sExit ystate) 0
+processQuery opts ystate h Stop = putMVar (sExit ystate) 0
 
-updateMetric :: MVar MetricsMap -> Handle -> QMetric -> IO ()
-updateMetric mvMetrics h (QMetric key ep lvl cnt) = do
+updateMetric :: Double -> MVar MetricsMap -> Handle -> QMetric -> IO ()
+updateMetric smoothingWindow mvMetrics h (QMetric key ep lvl cnt) = do
     let k = Key key ep
     metric <- modifyMVar mvMetrics (\metrics ->
         case Map.lookup k metrics of
             Just m -> return $! (metrics, m)
             Nothing -> do
-                m <- newMetric
+                m <- newMetric smoothingWindow
                 return $! (Map.insert k m metrics, m))
     modifyMVar_ (mData metric) (\(MData c _) -> return $! MData (c + cnt) lvl)
 
-newMetric :: IO Metric
-newMetric = do
-    mavg <- mavgNewIO 60.0
+newMetric :: Double -> IO Metric
+newMetric smoothingWindow = do
+    mavg <- mavgNewIO smoothingWindow
     ma <- newMVar mavg
     mc <- newMVar (MData 0 B.empty)
     return $ Metric ma mc
