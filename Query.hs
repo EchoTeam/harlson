@@ -97,7 +97,7 @@ readReplyByType :: Handle -> String -> IO Reply
 readReplyByType h "ROVL" = do
     len <- readInt h
     fmap ReplyOverLimit $ replicateM len (readOverLimit h)    
-readReplyByType h "ROLU" = do
+readReplyByType h "ROLU" =
     fmap ReplyOverLimitUpdate $ readOverLimit h
 
 writeMetric :: Handle -> QMetric -> IO ()

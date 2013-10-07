@@ -8,14 +8,16 @@ data Mode = StandaloneMode | ErlangPortMode
 
 data Options = Options
     { optPort       :: String
+    , optTelnetPort :: String
     , optMode       :: Mode
-    , optSmoothing :: Double
+    , optSmoothing  :: Double
     } deriving Show
 
 defaultOptions = Options
-    { optPort = "1813"
-    , optMode = StandaloneMode
-    , optSmoothing = 60.0
+    { optPort       = "1813"
+    , optTelnetPort = "1820"
+    , optMode       = StandaloneMode
+    , optSmoothing  = 60.0
     }
 
 modeOfString :: String -> Mode
@@ -25,16 +27,19 @@ modeOfString sMode = case sMode of
 
 options :: [OptDescr (Options -> Options)]
 options =
-    [ Option ['p'] ["port"]
+    [ Option "p" ["port"]
         (OptArg (optArg $ \opts p -> opts {optPort = p}) "PORT")
         "TCP port for incoming connections (defaults to 1813)"
-    , Option ['m'] ["mode"]
+    , Option "t" ["telnet-port"]
+        (OptArg (optArg $ \opts p -> opts {optTelnetPort = p}) "TELNET PORT")
+        "TCP port for telnet connections (defaults to 1820)"
+    , Option "m" ["mode"]
         (OptArg (optArg $ \opts m -> opts {optMode = modeOfString m}) "MODE")
         "Operational mode: erlangport | standalone (default)"
-    , Option ['s'] ["smoothing"]
+    , Option "s" ["smoothing"]
         (OptArg (optArg $ \opts s -> opts {optSmoothing = read s}) "SMOOTHING-WINDOW")
         "Smoothing window, secs (defaults to 60.0)"
-    ] where optArg f a opts = maybe opts (\m -> f opts m) a
+    ] where optArg f a opts = maybe opts (f opts) a
 
 progOpts :: IO Options
 progOpts = do 

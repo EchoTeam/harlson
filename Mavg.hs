@@ -46,7 +46,7 @@ bumpRate m now n =
         ur = realToFrac n
         h = historicAvg m
         p = period m
-        h' = (exp (-1.0 / p / magicFactor) * (h - ur) + ur) * (exp ((1.0 - elapsed) / p / magicFactor))
+        h' = (exp (-1.0 / p / magicFactor) * (h - ur) + ur) * exp ((1.0 - elapsed) / p / magicFactor)
         elapsed = realToFrac $ diffUTCTime now (lastUpdateTS m)
 
 bumpValue :: Mavg -> UTCTime -> Double -> Mavg
