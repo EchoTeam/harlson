@@ -6,6 +6,7 @@ import qualified Data.Binary.Put as Put
 import qualified Data.Binary.Get as Get
 import System.IO
 import Control.Monad
+import Control.Applicative
 
 data QMetric = QMetric { qmKey :: B.ByteString
                        , qmEndpoint :: B.ByteString
@@ -85,10 +86,10 @@ writeReply h (ReplyOverLimitUpdate overlimit) = do
 readQueryByType :: Handle -> String -> IO Query
 readQueryByType h "UPME" = do
     len <- readInt h
-    fmap UpdateMetrics $ replicateM len (readMetric h)
+    UpdateMetrics <$> replicateM len (readMetric h)
 readQueryByType h "UPLI" = do
     len <- readInt h
-    fmap UpdateLimits $ replicateM len (readLimit h)
+    UpdateLimits <$> replicateM len (readLimit h)
 readQueryByType h "GOVL" = return GetOverLimit
 readQueryByType h "OVLU" = return OverLimitUpdates
 readQueryByType h "STOP" = return Stop
@@ -96,9 +97,9 @@ readQueryByType h "STOP" = return Stop
 readReplyByType :: Handle -> String -> IO Reply
 readReplyByType h "ROVL" = do
     len <- readInt h
-    fmap ReplyOverLimit $ replicateM len (readOverLimit h)    
+    ReplyOverLimit <$> replicateM len (readOverLimit h)    
 readReplyByType h "ROLU" =
-    fmap ReplyOverLimitUpdate $ readOverLimit h
+    ReplyOverLimitUpdate <$> readOverLimit h
 
 writeMetric :: Handle -> QMetric -> IO ()
 writeMetric h (QMetric key endpoint level count) = do

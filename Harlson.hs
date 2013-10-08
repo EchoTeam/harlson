@@ -26,6 +26,7 @@ import Options
 import Mavg
 import Server
 import Query
+
 import TelnetHandler
 
 data MData = MData { mdCounter :: Int
@@ -166,7 +167,7 @@ statsWindows = [60.0, 300.0, 3600.0, 86400.0]
 
 initialStats :: IO (MVar Stats)
 initialStats = do
-    let mk = fmap (MavgAcc 0) $ mapM mavgNewIO statsWindows
+    let mk = MavgAcc 0 <$> mapM mavgNewIO statsWindows
     connects <- mk
     metrics <- mk
     newMVar $ Stats connects metrics
@@ -201,12 +202,12 @@ runTelnetCmd ystate "s" = do
     return $ render (statsDoc $$ lenDoc)
 runTelnetCmd ystate "l" = do
     let u = text . B8.unpack
-    lims <- fmap Map.toAscList $ readMVar (sLimits ystate)
+    lims <- Map.toAscList <$> readMVar (sLimits ystate)
     let doc = vcat [u lev <> text "/" <> u ep <> colon <+> int v | (LKey lev ep, v) <- lims]
     return $ render doc
 runTelnetCmd ystate "showallmetrics" = do
     let u = text . B8.unpack
-    lims' <- fmap Map.toAscList $ readMVar (sMetrics ystate)
+    lims' <- Map.toAscList <$> readMVar (sMetrics ystate)
     lims <- mapM (\(Key key ep, Metric m d) -> do
                     mavg <- readMVar m
                     MData _ lev <- readMVar d
@@ -214,5 +215,14 @@ runTelnetCmd ystate "showallmetrics" = do
     let doc = vcat [u key <> text "/" <> u ep <> text "/" <> u lev <> colon <+> int (rateAverage mavg)
                         | (key, ep, lev, mavg) <- lims]
     return $ render doc
+runTelnetCmd ystate "help" = return listTelnetCmds
+runTelnetCmd ystate "h" = return listTelnetCmds
 runTelnetCmd ystate cmd =
     return "Unrecognized command"
+
+listTelnetCmds = render $ vcat [text cmd <> text " -- " <> text desc | (cmd, desc) <- cmds]
+    where cmds =
+            [ ("s             ", "Show quick stats")
+            , ("l             ", "Show limits")
+            , ("showallmetrics", "List all metrics")
+            , ("help (or h)   ", "Display help") ]
