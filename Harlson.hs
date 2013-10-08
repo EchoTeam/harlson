@@ -4,6 +4,7 @@ import Network.Socket
 import Network.BSD
 
 import Control.Exception
+import Control.Applicative
 import Control.Concurrent
 import Control.Concurrent.MVar
 
@@ -103,7 +104,7 @@ mavgUpdater ystate = do
     let ms = Map.toList metrics
     mapM_ (\(k@(Key _ ep), m)  -> do
         mavg <- readMVar (mMavg m)
-        (c, lvl) <- modifyMVar (mData m) (\(MData c lvl) -> return $! (MData 0 lvl, (c, lvl)))
+        (c, lvl) <- modifyMVar (mData m) (\(MData c lvl) -> return (MData 0 lvl, (c, lvl)))
         let mavg' = bumpRate mavg now c
         let ra = rateAverage mavg'
         modifyMVar_ (sOverLimits ystate) (\overLimits -> do
@@ -168,29 +169,34 @@ initialStats = do
     let mk = fmap (MavgAcc 0) $ mapM mavgNewIO statsWindows
     connects <- mk
     metrics <- mk
-    newMVar $! Stats connects metrics
+    newMVar $ Stats connects metrics
 
 updateStats :: MVar Stats -> Int -> Int -> IO ()
 updateStats mvStats c m =
     modifyMVar_ mvStats (\(Stats conns mtrs) -> do
         let conns' = conns {maAcc = maAcc conns + c}
         let mtrs' = mtrs {maAcc = maAcc mtrs + m}
-        return $! Stats conns' mtrs')
+        return $ Stats conns' mtrs')
 
 bumpStats now mvStats = do
     let bump n = map (\m -> bumpRate m now n)
     modifyMVar_ mvStats (\(Stats (MavgAcc c cs) (MavgAcc m ms)) -> do
         let cs' = bump c cs
         let ms' = bump m ms
-        return $! Stats (MavgAcc 0 cs') (MavgAcc 0 ms'))
+        return $ Stats (MavgAcc 0 cs') (MavgAcc 0 ms'))
 
 runTelnetCmd ystate "s" = do
-    (Stats (MavgAcc _ cs) (MavgAcc _ ms)) <- readMVar $ sStats ystate
-    let ds = [(nm, zip (map rateAverage ls) statsWindows) | (nm, ls) <- [("Queries", cs), ("Metrics", ms)]]
-    let statsDoc = vcat [text nm <> colon <+> nest 4 (vcat [int v <+> text "per" <+> double s <> text "s" | (v, s) <- ks]) | (nm, ks) <- ds]
-    mesize <- fmap Map.size $ readMVar (sMetrics ystate)
-    lisize <- fmap Map.size $ readMVar (sLimits ystate)
-    olsize <- fmap Map.size $ readMVar (sOverLimits ystate)
+    let get f = readMVar $ f ystate
+    (Stats (MavgAcc _ cs) (MavgAcc _ ms)) <- get sStats
+    let ds = [(nm, zip (map rateAverage ls) statsWindows)
+                | (nm, ls) <- [("Queries", cs), ("Metrics", ms)]]
+    let statsDoc = vcat [text nm <> colon <+> nest 4
+                            (vcat [int v <+> text "per" <+> double s <> text "s"
+                                | (v, s) <- ks])
+                            | (nm, ks) <- ds]
+    mesize <- Map.size <$> get sMetrics
+    lisize <- Map.size <$> get sLimits
+    olsize <- Map.size <$> get sOverLimits
     let lenDoc = text "Metrics:" <+> int mesize $$ text "Limits:" <+> int lisize $$ text "Over:" <+> int olsize 
     return $ render (statsDoc $$ lenDoc)
 runTelnetCmd ystate "l" = do
