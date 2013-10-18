@@ -8,37 +8,37 @@ import System.IO
 import Control.Monad
 import Control.Applicative
 
-data QMetric = QMetric { qmKey :: B.ByteString
-                       , qmEndpoint :: B.ByteString
-                       , qmLevel :: B.ByteString
-                       , qmCount :: Int
+data QMetric = QMetric { qmKey :: !B.ByteString
+                       , qmEndpoint :: !B.ByteString
+                       , qmLevel :: !B.ByteString
+                       , qmCount :: !Int
                        } deriving Show
 
-data QLimit = QLimit { qlLevel :: B.ByteString
-                     , qlEndpoint :: B.ByteString
-                     , qlLimit :: Int
+data QLimit = QLimit { qlLevel :: !B.ByteString
+                     , qlEndpoint :: !B.ByteString
+                     , qlLimit :: !Int
                      } deriving Show
 
-data ROverLimit = ROverLimit { roKey :: B.ByteString
-                             , roEndpoint :: B.ByteString
-                             , roOverLimitChange :: OverLimitChange
+data ROverLimit = ROverLimit { roKey :: !B.ByteString
+                             , roEndpoint :: !B.ByteString
+                             , roOverLimitChange :: !OverLimitChange
                              } deriving Show
 
-data OverLimitChange = OverLimitAdded { roValue :: Int
-                                      , roThrottle :: Int -- as a permille
+data OverLimitChange = OverLimitAdded { roValue :: !Int
+                                      , roThrottle :: !Int -- as a permille
                                       }
                      | OverLimitRemoved
                         deriving Show
 
-data Query = UpdateMetrics [QMetric]
-           | UpdateLimits [QLimit]
+data Query = UpdateMetrics ![QMetric]
+           | UpdateLimits ![QLimit]
            | GetOverLimit
            | OverLimitUpdates
            | Stop
                 deriving Show
 
-data Reply = ReplyOverLimit [ROverLimit]
-           | ReplyOverLimitUpdate ROverLimit
+data Reply = ReplyOverLimit ![ROverLimit]
+           | ReplyOverLimitUpdate !ROverLimit
                 deriving Show
 
 readQuery :: Handle -> IO Query

@@ -11,7 +11,7 @@ import Control.Concurrent.MVar
 import Data.Time.Clock
 import Data.Word
 import Data.Maybe
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as B8
 import qualified Data.Binary.Put as Put
@@ -29,24 +29,24 @@ import Query
 
 import TelnetHandler
 
-data MData = MData { mdCounter :: Int
-                   , mdLevel :: B.ByteString
+data MData = MData { mdCounter :: !Int
+                   , mdLevel :: !B.ByteString
                    } deriving Show
 
-data OverLimit = OverLimit { oValue :: Int
-                           , oThrottle :: Int
+data OverLimit = OverLimit { oValue :: !Int
+                           , oThrottle :: !Int
                            } deriving Show
 
-data Metric = Metric { mMavg :: MVar Mavg
-                     , mData :: MVar MData
+data Metric = Metric { mMavg :: !(MVar Mavg)
+                     , mData :: !(MVar MData)
                      }
 
-data Key = Key { kKey :: B.ByteString
-               , kEndpoint :: B.ByteString
+data Key = Key { kKey :: !B.ByteString
+               , kEndpoint :: !B.ByteString
                } deriving (Show, Eq, Ord)
 
-data LKey = LKey { lkLevel :: B.ByteString
-                 , lkEndpoint :: B.ByteString
+data LKey = LKey { lkLevel :: !B.ByteString
+                 , lkEndpoint :: !B.ByteString
                  } deriving (Show, Eq, Ord)
 
 type MetricsMap = Map.Map Key Metric
@@ -55,19 +55,19 @@ type OverLimitsMap = Map.Map Key OverLimit
 
 type LimitsMap = Map.Map LKey Int
 
-data MavgAcc = MavgAcc { maAcc :: Int
-                       , maMavgs :: [Mavg]
+data MavgAcc = MavgAcc { maAcc :: !Int
+                       , maMavgs :: ![Mavg]
                        } deriving Show
 
-data Stats = Stats { statConnects :: MavgAcc
-                   , statMetrics :: MavgAcc
+data Stats = Stats { statConnects :: !MavgAcc
+                   , statMetrics :: !MavgAcc
                    } deriving Show
 
-data YState = YState { sMetrics :: MVar MetricsMap
-                     , sOverLimits :: MVar OverLimitsMap -- the only modifier is mavgUpdater
-                     , sLimits :: MVar LimitsMap
-                     , sStats :: MVar Stats
-                     , sExit :: MVar Int
+data YState = YState { sMetrics :: !(MVar MetricsMap)
+                     , sOverLimits :: !(MVar OverLimitsMap) -- the only modifier is mavgUpdater
+                     , sLimits :: !(MVar LimitsMap)
+                     , sStats :: !(MVar Stats)
+                     , sExit :: !(MVar Int)
                      }
 
 runHarlson opts = do

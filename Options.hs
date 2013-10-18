@@ -7,10 +7,10 @@ data Mode = StandaloneMode | ErlangPortMode
     deriving Show
 
 data Options = Options
-    { optPort       :: String
-    , optTelnetPort :: String
-    , optMode       :: Mode
-    , optSmoothing  :: Double
+    { optPort       :: !String
+    , optTelnetPort :: !String
+    , optMode       :: !Mode
+    , optSmoothing  :: !Double
     } deriving Show
 
 defaultOptions = Options

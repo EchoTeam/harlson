@@ -5,10 +5,10 @@ import Data.Time.Clock
 import Control.Concurrent
 
 data Mavg = Mavg
-    { historicAvg :: Double
-    , lastUpdateTS :: UTCTime
-    , period :: Double
-    , rateAverage :: Int
+    { historicAvg :: !Double
+    , lastUpdateTS :: !UTCTime
+    , period :: !Double
+    , rateAverage :: !Int
     }
     deriving (Eq, Ord)
 
