@@ -34,11 +34,13 @@ data Query = UpdateMetrics ![QMetric]
            | UpdateLimits ![QLimit]
            | GetOverLimit
            | OverLimitUpdates
+           | GetStats
            | Stop
                 deriving Show
 
 data Reply = ReplyOverLimit ![ROverLimit]
            | ReplyOverLimitUpdate !ROverLimit
+           | ReplyText String
                 deriving Show
 
 readQuery :: Handle -> IO Query
@@ -63,6 +65,9 @@ writeQuery h GetOverLimit = do
 writeQuery h OverLimitUpdates = do
     B.hPut h $ B8.pack "OVLU"
     hFlush h
+writeQuery h GetStats = do
+    B.hPut h $ B8.pack "STAT"
+    hFlush h
 writeQuery h Stop = do
     B.hPut h $ B8.pack "STOP"
     hFlush h
@@ -82,6 +87,12 @@ writeReply h (ReplyOverLimitUpdate overlimit) = do
     B.hPut h $ B8.pack "ROLU"
     writeOverLimit h overlimit
     hFlush h
+writeReply h (ReplyText text) = do
+    B.hPut h $ B8.pack "RTEX"
+    let binText = B8.pack text
+    let len = B8.length binText
+    writeInt h len
+    B.hPut h binText
 
 readQueryByType :: Handle -> String -> IO Query
 readQueryByType h "UPME" = do
@@ -92,6 +103,7 @@ readQueryByType h "UPLI" = do
     UpdateLimits <$> replicateM len (readLimit h)
 readQueryByType h "GOVL" = return GetOverLimit
 readQueryByType h "OVLU" = return OverLimitUpdates
+readQueryByType h "STAT" = return GetStats
 readQueryByType h "STOP" = return Stop
 
 readReplyByType :: Handle -> String -> IO Reply
@@ -100,6 +112,10 @@ readReplyByType h "ROVL" = do
     ReplyOverLimit <$> replicateM len (readOverLimit h)    
 readReplyByType h "ROLU" =
     ReplyOverLimitUpdate <$> readOverLimit h
+readReplyByType h "RTEX" = do
+    len <- readInt h
+    binText <- B.hGet h len
+    return $ ReplyText $ B8.unpack binText
 
 writeMetric :: Handle -> QMetric -> IO ()
 writeMetric h (QMetric key endpoint level count) = do

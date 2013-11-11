@@ -11,6 +11,7 @@ import Control.Concurrent.MVar
 import Data.Time.Clock
 import Data.Word
 import Data.Maybe
+import Data.Char
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as B8
@@ -59,7 +60,7 @@ data MavgAcc = MavgAcc { maAcc :: !Int
                        , maMavgs :: ![Mavg]
                        } deriving Show
 
-data Stats = Stats { statConnects :: !MavgAcc
+data Stats = Stats { statQueries :: !MavgAcc
                    , statMetrics :: !MavgAcc
                    } deriving Show
 
@@ -102,6 +103,8 @@ mavgUpdater ystate = do
     limits <- readMVar (sLimits ystate)
     now <- getCurrentTime
     bumpStats now (sStats ystate)
+    stats <- runTelnetCmd ystate "s"
+    -- hPutStrLn stderr $ stats ++ "\n\n"
     let ms = Map.toList metrics
     mapM_ (\(k@(Key _ ep), m)  -> do
         mavg <- readMVar (mMavg m)
@@ -143,6 +146,9 @@ processQuery opts ystate h (UpdateLimits qls) = do
     modifyMVar_ mvLimits (\limits -> do
         let limits' = Map.fromList [(LKey lvl ep, lim) | (QLimit lvl ep lim) <- qls]
         return limits')
+processQuery opts ystate h GetStats = do
+    formattedStats <- prepareStats opts ystate
+    writeReply h $ ReplyText formattedStats
 processQuery opts ystate h Stop = putMVar (sExit ystate) 0
 
 updateMetric :: Double -> MVar MetricsMap -> Handle -> QMetric -> IO ()
@@ -163,11 +169,11 @@ newMetric smoothingWindow = do
     mc <- newMVar (MData 0 B.empty)
     return $ Metric ma mc
 
-statsWindows = [60.0, 300.0, 3600.0, 86400.0]
+statsWindows = [(60.0, "min"), (300.0, "5min"), (3600.0, "hour"), (86400.0, "day")]
 
 initialStats :: IO (MVar Stats)
 initialStats = do
-    let mk = MavgAcc 0 <$> mapM mavgNewIO statsWindows
+    let mk = MavgAcc 0 <$> (mapM mavgNewIO $ map fst statsWindows)
     connects <- mk
     metrics <- mk
     newMVar $ Stats connects metrics
@@ -186,13 +192,16 @@ bumpStats now mvStats = do
         let ms' = bump m ms
         return $ Stats (MavgAcc 0 cs') (MavgAcc 0 ms'))
 
+
+-- Telnet commands
+
 runTelnetCmd ystate "s" = do
     let get f = readMVar $ f ystate
-    (Stats (MavgAcc _ cs) (MavgAcc _ ms)) <- get sStats
-    let ds = [(nm, zip (map rateAverage ls) statsWindows)
-                | (nm, ls) <- [("Queries", cs), ("Metrics", ms)]]
+    (Stats (MavgAcc _ qs) (MavgAcc _ ms)) <- get sStats
+    let ds = [(nm, zip (map rateAverage ls) (map snd statsWindows))
+                | (nm, ls) <- [("Queries", qs), ("Metrics", ms)]]
     let statsDoc = vcat [text nm <> colon <+> nest 4
-                            (vcat [int v <+> text "per" <+> double s <> text "s"
+                            (vcat [int v <+> text "per" <+> text s
                                 | (v, s) <- ks])
                             | (nm, ks) <- ds]
     mesize <- Map.size <$> get sMetrics
@@ -226,3 +235,51 @@ listTelnetCmds = render $ vcat [text cmd <> text " -- " <> text desc | (cmd, des
             , ("l             ", "Show limits")
             , ("showallmetrics", "List all metrics")
             , ("help (or h)   ", "Display help") ]
+
+
+-- Preparing stats for Folsom/Riemann/Graphite
+
+prepareStats :: Options -> YState -> IO String
+prepareStats opts ystate = do
+    metricStats <- prepareMetricStats opts ystate
+    harlsonStats <- prepareHarlsonStats opts ystate
+    return $ render $ metricStats $$ harlsonStats
+
+prepareMetricStats opts ystate = do
+    metrics <- Map.toList <$> readMVar (sMetrics ystate)
+    docs <- mapM (\(key@(Key k ep), Metric mvMavg _) -> do
+            n <- rateAverage <$> readMVar mvMavg
+            return $ constructMetricDoc k ep n
+        ) metrics
+    return $ vcat docs
+
+prepareHarlsonStats opts ystate = do
+    let get f = readMVar $ f ystate
+    stats <- get sStats
+    let (MavgAcc _ qs) = statQueries stats
+    let (MavgAcc _ ms) = statMetrics stats
+
+    let mkLineDoc name (v, k) = text "rls.stats." <> text name <> text "." <> text k <> semi <> int (rateAverage v)
+    let mkSectionDoc (cs, name) = vcat $ map (mkLineDoc name) $ zip cs $ map snd statsWindows
+    let doc1 = vcat $ map mkSectionDoc [(qs, "connects"), (ms, "metrics")]
+
+    mesize <- Map.size <$> get sMetrics
+    lisize <- Map.size <$> get sLimits
+    olsize <- Map.size <$> get sOverLimits
+
+    let sz x = Map.size <$> get x
+    let mkCurrentDoc (vM, k) = do
+        v <- vM
+        let doc = text "rls.stats.current." <> text k <> semi <> int v
+        return doc
+    doc2 <- vcat <$> mapM mkCurrentDoc [ (sz sMetrics, "metrics")
+                                       , (sz sLimits, "limits")
+                                       , (sz sOverLimits, "overlimits")]
+    return $ doc1 $$ doc2
+
+constructMetricDoc k ep n =
+    text "rls.metrics." <> u k <> text "." <> u ep <> semi <> int n where
+        u = text . safeString . B8.unpack
+        safeString = map r
+        r c = if isAlphaNum c then c else '_'
+
