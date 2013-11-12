@@ -7,6 +7,8 @@ import Control.Exception
 import Control.Applicative
 import Control.Concurrent
 import Control.Concurrent.MVar
+import Control.DeepSeq
+import Control.Exception
 
 import Data.Time.Clock
 import Data.Word
@@ -96,6 +98,10 @@ waitPortClose mvExit = do
     r <- try getChar :: IO (Either IOError Char)
     putMVar mvExit 0
 
+
+force' :: (Show a) => a -> IO ()
+force' = evaluate . flip deepseq () . show
+
 mavgUpdater :: YState -> IO ()
 mavgUpdater ystate = do
     threadDelay 1000000
@@ -103,8 +109,7 @@ mavgUpdater ystate = do
     limits <- readMVar (sLimits ystate)
     now <- getCurrentTime
     bumpStats now (sStats ystate)
-    stats <- runTelnetCmd ystate "s"
-    -- hPutStrLn stderr $ stats ++ "\n\n"
+    force' =<< runTelnetCmd ystate "s"
     let ms = Map.toList metrics
     mapM_ (\(k@(Key _ ep), m)  -> do
         mavg <- readMVar (mMavg m)

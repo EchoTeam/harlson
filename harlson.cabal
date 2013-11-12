@@ -11,7 +11,7 @@ Cabal-version:       >= 1.2
 
 Executable harlson
     Main-is:             Main.hs
-    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, containers >= 0.5.0.0, binary, bytestring, pretty
+    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, containers >= 0.5.0.0, binary, bytestring, pretty, deepseq
     ghc-options:         -O3 -threaded -rtsopts -auto-all
 
 Executable perf-harlson
