@@ -35,12 +35,14 @@ data Query = UpdateMetrics ![QMetric]
            | GetOverLimit
            | OverLimitUpdates
            | GetStats
+           | UnknownQuery
            | Stop
                 deriving Show
 
 data Reply = ReplyOverLimit ![ROverLimit]
            | ReplyOverLimitUpdate !ROverLimit
            | ReplyText String
+           | ReplyUnknown
                 deriving Show
 
 readQuery :: Handle -> IO Query
@@ -68,6 +70,9 @@ writeQuery h OverLimitUpdates = do
 writeQuery h GetStats = do
     B.hPut h $ B8.pack "STAT"
     hFlush h
+writeQuery h UnknownQuery = do
+    B.hPut h $ B8.pack "UNKN"
+    hFlush h
 writeQuery h Stop = do
     B.hPut h $ B8.pack "STOP"
     hFlush h
@@ -93,6 +98,10 @@ writeReply h (ReplyText text) = do
     let len = B8.length binText
     writeInt h len
     B.hPut h binText
+    hFlush h
+writeReply h ReplyUnknown = do
+    B.hPut h $ B8.pack "RUNK"
+    hFlush h
 
 readQueryByType :: Handle -> String -> IO Query
 readQueryByType h "UPME" = do
@@ -101,10 +110,11 @@ readQueryByType h "UPME" = do
 readQueryByType h "UPLI" = do
     len <- readInt h
     UpdateLimits <$> replicateM len (readLimit h)
-readQueryByType h "GOVL" = return GetOverLimit
-readQueryByType h "OVLU" = return OverLimitUpdates
-readQueryByType h "STAT" = return GetStats
-readQueryByType h "STOP" = return Stop
+readQueryByType _h "GOVL" = return GetOverLimit
+readQueryByType _h "OVLU" = return OverLimitUpdates
+readQueryByType _h "STAT" = return GetStats
+readQueryByType _h "STOP" = return Stop
+readQueryByType _h _ = return UnknownQuery
 
 readReplyByType :: Handle -> String -> IO Reply
 readReplyByType h "ROVL" = do
@@ -116,6 +126,7 @@ readReplyByType h "RTEX" = do
     len <- readInt h
     binText <- B.hGet h len
     return $ ReplyText $ B8.unpack binText
+readReplyByType _h _ = return ReplyUnknown
 
 writeMetric :: Handle -> QMetric -> IO ()
 writeMetric h (QMetric key endpoint level count) = do
@@ -143,11 +154,11 @@ writeOverLimit h (ROverLimit key endpoint change) = do
     B.hPut h endpoint
     case change of
         OverLimitAdded value throttle -> do
-            writeShort h 0
+            writeShort h (0 :: Int)
             writeInt h value
             writeInt h throttle
         OverLimitRemoved ->
-            writeShort h 1
+            writeShort h (1 :: Int)
 
 readMetric :: Handle -> IO QMetric
 readMetric h = do
@@ -181,7 +192,7 @@ readOverLimit h = do
                     value <- readInt h
                     throttle <- readInt h
                     return $ OverLimitAdded value throttle
-                1 -> return OverLimitRemoved
+                _ -> return OverLimitRemoved
     return $ ROverLimit key endpoint change
 
 readInt :: Handle -> IO Int

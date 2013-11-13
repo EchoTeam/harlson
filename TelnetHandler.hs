@@ -29,6 +29,7 @@ handleTelnet' runCmd sa h = do
                     hPutStrLn h ""
                     handleTelnet' runCmd sa h
 
-strip = lstrip . rstrip
-lstrip = dropWhile (`elem` " \t\r\n")
-rstrip = reverse . lstrip . reverse
+strip :: String -> String
+strip = lstrip . rstrip where
+    lstrip = dropWhile (`elem` " \t\r\n")
+    rstrip = reverse . lstrip . reverse

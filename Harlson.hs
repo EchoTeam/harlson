@@ -1,27 +1,19 @@
 module Harlson where
 
 import Network.Socket
-import Network.BSD
 
 import Control.Exception
 import Control.Applicative
 import Control.Concurrent
-import Control.Concurrent.MVar
 import Control.DeepSeq
-import Control.Exception
 
 import Data.Time.Clock
-import Data.Word
-import Data.Maybe
 import Data.Char
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as B8
-import qualified Data.Binary.Put as Put
-import qualified Data.Binary.Get as Get
 
 import System.IO
-import System.Exit
 
 import Text.PrettyPrint
 
@@ -73,6 +65,7 @@ data YState = YState { sMetrics :: !(MVar MetricsMap)
                      , sExit :: !(MVar Int)
                      }
 
+runHarlson :: Options -> IO ()
 runHarlson opts = do
     mvMetrics <- newMVar Map.empty
     mvOverLimits <- newMVar Map.empty
@@ -90,17 +83,18 @@ runHarlson opts = do
             return ()
         StandaloneMode ->
             return ()
-    exitCode <- takeMVar mvExit
+    takeMVar mvExit
     return ()
 
+waitPortClose :: MVar Int -> IO ()
 waitPortClose mvExit = do
     hSetBuffering stdin NoBuffering
-    r <- try getChar :: IO (Either IOError Char)
+    try getChar :: IO (Either IOError Char)
     putMVar mvExit 0
 
 
-force' :: (Show a) => a -> IO ()
-force' = evaluate . flip deepseq () . show
+force' :: (Show a) => a -> IO a
+force' x = evaluate $ deepseq (show x) x
 
 mavgUpdater :: YState -> IO ()
 mavgUpdater ystate = do
@@ -108,8 +102,9 @@ mavgUpdater ystate = do
     metrics <- readMVar (sMetrics ystate)
     limits <- readMVar (sLimits ystate)
     now <- getCurrentTime
-    bumpStats now (sStats ystate)
-    force' =<< runTelnetCmd ystate "s"
+    let mvStats = sStats ystate
+    bumpStats now mvStats
+    modifyMVar_ mvStats force'
     let ms = Map.toList metrics
     mapM_ (\(k@(Key _ ep), m)  -> do
         mavg <- readMVar (mMavg m)
@@ -136,28 +131,30 @@ handler qp sa h = do
         else readQuery h >>= qp h >> handler qp sa h
 
 processQuery :: Options -> YState -> Handle -> Query -> IO ()
-processQuery opts ystate h (UpdateMetrics qms) = do
+processQuery opts ystate _h (UpdateMetrics qms) = do
     updateStats (sStats ystate) 1 (length qms)
-    mapM_ (updateMetric (optSmoothing opts) (sMetrics ystate) h) qms
-processQuery opts ystate h GetOverLimit = do
+    mapM_ (updateMetric (optSmoothing opts) (sMetrics ystate)) qms
+processQuery _opts ystate h GetOverLimit = do
     updateStats (sStats ystate) 1 0
     let mvOverLimits = sOverLimits ystate
     overLimitsMap <- readMVar mvOverLimits
     let os = Map.toList overLimitsMap
     writeReply h $ ReplyOverLimit [ROverLimit k e (OverLimitAdded val thr) | (Key k e, OverLimit val thr) <- os]
-processQuery opts ystate h (UpdateLimits qls) = do
+processQuery _opts ystate _h (UpdateLimits qls) = do
     updateStats (sStats ystate) 1 0
     let mvLimits = sLimits ystate
-    modifyMVar_ mvLimits (\limits -> do
-        let limits' = Map.fromList [(LKey lvl ep, lim) | (QLimit lvl ep lim) <- qls]
-        return limits')
-processQuery opts ystate h GetStats = do
-    formattedStats <- prepareStats opts ystate
+    modifyMVar_ mvLimits (\_oldLimits -> do
+        let limits = Map.fromList [(LKey lvl ep, lim) | (QLimit lvl ep lim) <- qls]
+        return limits)
+processQuery _opts ystate h GetStats = do
+    formattedStats <- prepareStats ystate
     writeReply h $ ReplyText formattedStats
-processQuery opts ystate h Stop = putMVar (sExit ystate) 0
+processQuery _opts ystate _h Stop = putMVar (sExit ystate) 0
+processQuery _opts _ystate h _ =
+    writeReply h $ ReplyText "Unknown query"
 
-updateMetric :: Double -> MVar MetricsMap -> Handle -> QMetric -> IO ()
-updateMetric smoothingWindow mvMetrics h (QMetric key ep lvl cnt) = do
+updateMetric :: Double -> MVar MetricsMap -> QMetric -> IO ()
+updateMetric smoothingWindow mvMetrics (QMetric key ep lvl cnt) = do
     let k = Key key ep
     metric <- modifyMVar mvMetrics (\metrics ->
         case Map.lookup k metrics of
@@ -174,6 +171,7 @@ newMetric smoothingWindow = do
     mc <- newMVar (MData 0 B.empty)
     return $ Metric ma mc
 
+statsWindows :: [(Double, String)]
 statsWindows = [(60.0, "min"), (300.0, "5min"), (3600.0, "hour"), (86400.0, "day")]
 
 initialStats :: IO (MVar Stats)
@@ -190,16 +188,18 @@ updateStats mvStats c m =
         let mtrs' = mtrs {maAcc = maAcc mtrs + m}
         return $ Stats conns' mtrs')
 
+bumpStats :: UTCTime -> MVar Stats -> IO ()
 bumpStats now mvStats = do
-    let bump n = map (\m -> bumpRate m now n)
+    let bump' n = map (\m -> bumpRate m now n)
     modifyMVar_ mvStats (\(Stats (MavgAcc c cs) (MavgAcc m ms)) -> do
-        let cs' = bump c cs
-        let ms' = bump m ms
+        let cs' = bump' c cs
+        let ms' = bump' m ms
         return $ Stats (MavgAcc 0 cs') (MavgAcc 0 ms'))
 
 
 -- Telnet commands
 
+runTelnetCmd :: YState -> String -> IO String
 runTelnetCmd ystate "s" = do
     let get f = readMVar $ f ystate
     (Stats (MavgAcc _ qs) (MavgAcc _ ms)) <- get sStats
@@ -229,11 +229,12 @@ runTelnetCmd ystate "showallmetrics" = do
     let doc = vcat [u key <> text "/" <> u ep <> text "/" <> u lev <> colon <+> int (rateAverage mavg)
                         | (key, ep, lev, mavg) <- lims]
     return $ render doc
-runTelnetCmd ystate "help" = return listTelnetCmds
-runTelnetCmd ystate "h" = return listTelnetCmds
-runTelnetCmd ystate cmd =
+runTelnetCmd _ystate "help" = return listTelnetCmds
+runTelnetCmd _ystate "h" = return listTelnetCmds
+runTelnetCmd _ystate _cmd =
     return "Unrecognized command"
 
+listTelnetCmds :: String
 listTelnetCmds = render $ vcat [text cmd <> text " -- " <> text desc | (cmd, desc) <- cmds]
     where cmds =
             [ ("s             ", "Show quick stats")
@@ -244,21 +245,23 @@ listTelnetCmds = render $ vcat [text cmd <> text " -- " <> text desc | (cmd, des
 
 -- Preparing stats for Folsom/Riemann/Graphite
 
-prepareStats :: Options -> YState -> IO String
-prepareStats opts ystate = do
-    metricStats <- prepareMetricStats opts ystate
-    harlsonStats <- prepareHarlsonStats opts ystate
+prepareStats :: YState -> IO String
+prepareStats ystate = do
+    metricStats <- prepareMetricStats ystate
+    harlsonStats <- prepareHarlsonStats ystate
     return $ render $ metricStats $$ harlsonStats
 
-prepareMetricStats opts ystate = do
+prepareMetricStats :: YState -> IO Doc
+prepareMetricStats ystate = do
     metrics <- Map.toList <$> readMVar (sMetrics ystate)
-    docs <- mapM (\(key@(Key k ep), Metric mvMavg _) -> do
+    docs <- mapM (\((Key k ep), Metric mvMavg _) -> do
             n <- rateAverage <$> readMVar mvMavg
             return $ constructMetricDoc k ep n
         ) metrics
     return $ vcat docs
 
-prepareHarlsonStats opts ystate = do
+prepareHarlsonStats :: YState -> IO Doc
+prepareHarlsonStats ystate = do
     let get f = readMVar $ f ystate
     stats <- get sStats
     let (MavgAcc _ qs) = statQueries stats
@@ -267,10 +270,6 @@ prepareHarlsonStats opts ystate = do
     let mkLineDoc name (v, k) = text "rls.stats." <> text name <> text "." <> text k <> semi <> int (rateAverage v)
     let mkSectionDoc (cs, name) = vcat $ map (mkLineDoc name) $ zip cs $ map snd statsWindows
     let doc1 = vcat $ map mkSectionDoc [(qs, "connects"), (ms, "metrics")]
-
-    mesize <- Map.size <$> get sMetrics
-    lisize <- Map.size <$> get sLimits
-    olsize <- Map.size <$> get sOverLimits
 
     let sz x = Map.size <$> get x
     let mkCurrentDoc (vM, k) = do
@@ -282,6 +281,7 @@ prepareHarlsonStats opts ystate = do
                                        , (sz sOverLimits, "overlimits")]
     return $ doc1 $$ doc2
 
+constructMetricDoc :: B8.ByteString -> B8.ByteString -> Int -> Doc
 constructMetricDoc k ep n =
     text "rls.metrics." <> u k <> text "." <> u ep <> semi <> int n where
         u = text . safeString . B8.unpack

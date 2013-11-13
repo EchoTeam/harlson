@@ -15,6 +15,7 @@ data Mavg = Mavg
 instance Show Mavg where
     show m = show (historicAvg m, rateAverage m)
 
+magicFactor :: Double
 magicFactor = 0.22
 
 mavgNew :: Double -> UTCTime -> Mavg
@@ -66,8 +67,9 @@ valueAverage = historicAvg
 
 needsUpdate :: Mavg -> UTCTime -> Bool
 needsUpdate m now =
-    1.0 <= realToFrac (diffUTCTime now (lastUpdateTS m))
+    1.0 <= (realToFrac (diffUTCTime now (lastUpdateTS m)) :: Double)
 
+test :: IO ()
 test = do
     m0 <- mavgNewIO 6.0
     t0 <- getCurrentTime
@@ -78,15 +80,17 @@ test = do
     print $ valueAverage m2
     print m2
 
+test2 :: IO ()
 test2 = do
     m <- mavgNewIO 60.0
     bump 600 m 1 
 
+bump :: Int -> Mavg -> Int -> IO ()
 bump 0 _ _ = return ()
 bump nc m n = do
     threadDelay 200000
     t <- getCurrentTime
-    print $ realToFrac $ diffUTCTime t (lastUpdateTS m)
+    print (realToFrac $ diffUTCTime t (lastUpdateTS m) :: Double)
     print $ period m
     print $ exp (-1.0 / period m)
     let m' = bumpRate m t n

@@ -13,6 +13,7 @@ data Options = Options
     , optSmoothing  :: !Double
     } deriving Show
 
+defaultOptions :: Options
 defaultOptions = Options
     { optPort       = "1813"
     , optTelnetPort = "1820"
@@ -46,6 +47,6 @@ progOpts = do
   args <- getArgs
   progName <- getProgName
   case getOpt Permute options args of
-    (o, n, [])   -> return $ foldl (flip id) defaultOptions o
+    (o, _, [])   -> return $ foldl (flip id) defaultOptions o
     (_, _, errs) -> ioError (userError (concat errs ++ usageInfo header options))
       where header = "Usage: " ++ progName ++ " [OPTION...]"

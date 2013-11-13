@@ -3,10 +3,7 @@ module Server (serveTCP, HandlerFunc) where
 
 -- Code based on the "Real World Haskell" book
 
-import Data.Bits
 import Network.Socket
-import Network.BSD
-import Data.List
 import Control.Concurrent
 import System.IO
 
