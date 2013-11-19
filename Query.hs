@@ -87,7 +87,7 @@ writeQuery h (UpdateLimits qlimits) = do
 writeQuery h (UpdateLevels qlevels) = do
     B.hPut   h $ B8.pack "UPLE"
     writeInt h $ length qlevels
-    -- todo
+    mapM_ (writeLevel h) qlevels
     hFlush h
 writeQuery h GetOverLimit = do
     B.hPut h $ B8.pack "GOVL"
@@ -182,6 +182,11 @@ writeLimit h (QLimit level endpoint limit) = do
     writeString h level
     writeString h endpoint
     writeInt    h limit
+
+writeLevel :: Handle -> QLevel -> IO ()
+writeLevel h (QLevel key level) = do
+    writeString h key
+    writeString h level
 
 writeOverLimit :: Handle -> ROverLimit -> IO ()
 writeOverLimit h (ROverLimit key endpoint change) = do

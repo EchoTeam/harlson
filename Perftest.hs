@@ -1,47 +1,62 @@
 import Network.Socket
-import Network.BSD
 import Control.Monad
 import Control.Concurrent
 import Control.Exception
 import System.IO
-import qualified Data.Binary.Put as Put
-import qualified Data.Binary.Get as Get
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as B8
 
 import Query
 
+main :: IO ()
 main = do
-    runJob 1 (updateMetrics 10000)
+    let keysCount = 10000
+    runJob 1 (updateMetrics keysCount)
     runJob 1 updateLimits
+    runJob 1 (updateLevels keysCount)
     vars <- replicateM 300 $ myForkIO $ runJob 1 (updateMetrics 2000)
     mapM_ takeMVar vars
     print "Done put"
     runJob 10 getOverLimit
     runJob 1 stop
 
-runJob n job = do
-    h <- newConnHandle
-    replicateM_ n $ job h
-    hClose h
+runJob :: Int -> (Handle -> IO ()) -> IO ()
+runJob n job = bracket newConnHandle hClose (replicateM_ n . job)
 
-metrics :: [QMetricLevel]
-metrics = [QMetricLevel (B8.pack $ "a@dev.washpost.com" ++ show x) (B8.pack "submit") (B8.pack "level1") 10 | x <- [1..]]
+keys :: [B.ByteString]
+keys = [B8.pack $ "a@dev.washpost.com" ++ show x | x <- [1..] :: [Integer]]
 
-updateMetrics :: Int -> Handle ->IO ()
+endpoint :: B.ByteString
+endpoint = B8.pack "submit"
+
+levelname :: B.ByteString
+levelname = B8.pack "level1"
+
+metrics :: [QMetric]
+metrics = [QMetric key endpoint 10 | key <- keys]
+
+levels :: [QLevel]
+levels = [QLevel key levelname | key <- keys]
+
+updateMetrics :: Int -> Handle -> IO ()
 updateMetrics m h = do
-    let q = UpdateMetricLevels (take m metrics)
+    let q = UpdateMetrics $ take m metrics
+    writeQuery h q
+
+updateLevels :: Int -> Handle -> IO ()
+updateLevels m h = do
+    let q = UpdateLevels $ take m levels
     writeQuery h q
 
 updateLimits :: Handle -> IO ()
 updateLimits h = do
-    let q = UpdateLimits [QLimit (B8.pack "level1") (B8.pack "submit") 2800]
+    let q = UpdateLimits [QLimit levelname endpoint 2800]
     writeQuery h q
 
 getOverLimit :: Handle -> IO ()
 getOverLimit h = do
     writeQuery h GetOverLimit
-    print =<< readReply h
+    print . length . show =<< readReply h
     threadDelay 1000000
 
 stop :: Handle -> IO ()
@@ -58,6 +73,6 @@ newConnHandle = do
 myForkIO :: IO () -> IO (MVar ())
 myForkIO io = do
     mvar <- newEmptyMVar
-    forkFinally io (\_ -> putMVar mvar ())
+    _ <- forkFinally io (\_ -> putMVar mvar ())
     return mvar
 
