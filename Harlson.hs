@@ -10,6 +10,7 @@ import Control.Monad
 
 import Data.Time.Clock
 import Data.Char
+import Data.Maybe
 import qualified Data.List as L
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString.Lazy as B
@@ -18,6 +19,7 @@ import qualified Data.ByteString.Lazy.Char8 as B8
 import System.IO
 
 import Text.PrettyPrint
+import Text.Regex
 
 import Options
 import Mavg
@@ -237,24 +239,28 @@ runTelnetCmd ystate "s" = do
     mesize <- Map.size <$> get sMetrics
     lisize <- Map.size <$> get sLimits
     olsize <- Map.size <$> get sOverLimits
-    let lenDoc = text "Metrics:" <+> int mesize $$ text "Limits:" <+> int lisize $$ text "Over:" <+> int olsize 
+    let lenDoc = text "Metrics:" <+> int mesize $$ 
+                 text "Limits:"  <+> int lisize $$ 
+                 text "Over:"    <+> int olsize 
     return $ render (statsDoc $$ lenDoc)
 runTelnetCmd ystate "l" = do
     let u = text . B8.unpack
     lims <- Map.toAscList <$> readMVar (sLimits ystate)
     let doc = vcat [u lev <> text "/" <> u ep <> colon <+> int v | (LKey lev ep, v) <- lims]
     return $ render doc
-runTelnetCmd ystate "showallmetrics" = do
+runTelnetCmd ystate "k" = do
     let u = text . B8.unpack
-    lims' <- Map.toAscList <$> readMVar (sMetrics ystate)
-    levels <- readMVar $ sLevels ystate
-    lims <- forM lims' $ \(Key key ep, Metric m _d) -> do
-                    mavg <- readMVar m
-                    let level = Map.findWithDefault defaultLevel key levels
-                    return (key, ep, level, mavg)
-    let doc = vcat [u key <> text "/" <> u ep <> text "/" <> u lev <> colon <+> int (rateAverage mavg)
-                        | (key, ep, lev, mavg) <- lims]
+    levels <- Map.toAscList <$> readMVar (sLevels ystate)
+    let doc = vcat [u key <+> text "->" <+> u level | (key, level) <- levels]
     return $ render doc
+runTelnetCmd ystate "showallmetrics" = do
+    lims <- Map.toAscList <$> readMVar (sMetrics ystate)
+    renderMetrics ystate lims
+runTelnetCmd ystate ('g':' ':grep) = do
+    lims <- Map.toAscList <$> readMVar (sMetrics ystate)
+    let regex = mkRegexWithOpts grep False False
+    renderMetrics ystate $ filter 
+        (isJust . matchRegex regex . B8.unpack . kKey . fst) lims
 runTelnetCmd _ystate "help" = return listTelnetCmds
 runTelnetCmd _ystate "h" = return listTelnetCmds
 runTelnetCmd _ystate _cmd =
@@ -265,9 +271,25 @@ listTelnetCmds = render $ vcat [text cmd <> text " -- " <> text desc | (cmd, des
     where cmds =
             [ ("s             ", "Show quick stats")
             , ("l             ", "Show limits")
-            , ("showallmetrics", "List all metrics")
+            , ("k             ", "Show key -> levels")
+            , ("showallmetrics", "List of all metrics")
+            , ("g <pattern>   ", "List of grepped metrics")
             , ("help (or h)   ", "Display help") ]
 
+renderMetrics :: YState -> [(Key, Metric)] -> IO String
+renderMetrics ystate lims' = do
+    let u = text . B8.unpack
+    levels <- readMVar $ sLevels ystate
+    lims <- forM lims' $ \(Key key ep, Metric m _d) -> do
+                    mavg <- readMVar m
+                    let level = Map.findWithDefault defaultLevel key levels
+                    return (key, ep, level, mavg)
+    let doc = vcat [u key <> text "/" <>
+                    u ep <> text "/" <> 
+                    u lev <> colon <+> 
+                    int (rateAverage mavg)
+                   | (key, ep, lev, mavg) <- lims]
+    return $ render doc
 
 -- Preparing stats for Folsom/Riemann/Graphite
 
@@ -293,8 +315,11 @@ prepareHarlsonStats ystate = do
     let (MavgAcc _ qs) = statQueries stats
     let (MavgAcc _ ms) = statMetrics stats
 
-    let mkLineDoc name (v, k) = text "rls.stats." <> text name <> text "." <> text k <> semi <> int (rateAverage v)
-    let mkSectionDoc (cs, name) = vcat $ map (mkLineDoc name) $ zip cs $ map snd statsWindows
+    let mkLineDoc name (v, k) = text "rls.stats." <> text name <> 
+                                text "." <> text k <> semi <> 
+                                int (rateAverage v)
+    let mkSectionDoc (cs, name) = 
+            vcat $ map (mkLineDoc name) $ zip cs $ map snd statsWindows
     let doc1 = vcat $ map mkSectionDoc [(qs, "connects"), (ms, "metrics")]
 
     let sz x = Map.size <$> get x
