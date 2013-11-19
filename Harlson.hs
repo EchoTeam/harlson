@@ -2,13 +2,15 @@ module Harlson where
 
 import Network.Socket
 
-import Control.Exception
 import Control.Applicative
 import Control.Concurrent
 import Control.DeepSeq
+import Control.Exception
+import Control.Monad
 
 import Data.Time.Clock
 import Data.Char
+import qualified Data.List as L
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString.Lazy as B
 import qualified Data.ByteString.Lazy.Char8 as B8
@@ -25,7 +27,6 @@ import Query
 import TelnetHandler
 
 data MData = MData { mdCounter :: !Int
-                   , mdLevel :: !B.ByteString
                    } deriving Show
 
 data OverLimit = OverLimit { oValue :: !Int
@@ -36,11 +37,11 @@ data Metric = Metric { mMavg :: !(MVar Mavg)
                      , mData :: !(MVar MData)
                      }
 
-data Key = Key { kKey :: !B.ByteString
+data Key = Key { kKey      :: !B.ByteString
                , kEndpoint :: !B.ByteString
                } deriving (Show, Eq, Ord)
 
-data LKey = LKey { lkLevel :: !B.ByteString
+data LKey = LKey { lkLevel    :: !B.ByteString
                  , lkEndpoint :: !B.ByteString
                  } deriving (Show, Eq, Ord)
 
@@ -50,7 +51,9 @@ type OverLimitsMap = Map.Map Key OverLimit
 
 type LimitsMap = Map.Map LKey Int
 
-data MavgAcc = MavgAcc { maAcc :: !Int
+type LevelsMap = Map.Map B.ByteString B.ByteString
+
+data MavgAcc = MavgAcc { maAcc   :: !Int
                        , maMavgs :: ![Mavg]
                        } deriving Show
 
@@ -58,11 +61,12 @@ data Stats = Stats { statQueries :: !MavgAcc
                    , statMetrics :: !MavgAcc
                    } deriving Show
 
-data YState = YState { sMetrics :: !(MVar MetricsMap)
+data YState = YState { sMetrics    :: !(MVar MetricsMap)
                      , sOverLimits :: !(MVar OverLimitsMap) -- the only modifier is mavgUpdater
-                     , sLimits :: !(MVar LimitsMap)
-                     , sStats :: !(MVar Stats)
-                     , sExit :: !(MVar Int)
+                     , sLimits     :: !(MVar LimitsMap)
+                     , sLevels     :: !(MVar LevelsMap)
+                     , sStats      :: !(MVar Stats)
+                     , sExit       :: !(MVar Int)
                      }
 
 runHarlson :: Options -> IO ()
@@ -70,9 +74,10 @@ runHarlson opts = do
     mvMetrics <- newMVar Map.empty
     mvOverLimits <- newMVar Map.empty
     mvLimits <- newMVar Map.empty
-    mvExit <- newEmptyMVar
-    mvStats <- initialStats
-    let ystate = YState mvMetrics mvOverLimits mvLimits mvStats mvExit
+    mvLevels <- newMVar Map.empty
+    mvExit   <- newEmptyMVar
+    mvStats  <- initialStats
+    let ystate = YState mvMetrics mvOverLimits mvLimits mvLevels mvStats mvExit
     let queryProcessor = processQuery opts ystate
     forkIO $ mavgUpdater ystate
     forkIO $ serveTCP (optPort opts) (handler queryProcessor)
@@ -96,31 +101,39 @@ waitPortClose mvExit = do
 force' :: (Show a) => a -> IO a
 force' x = evaluate $ deepseq (show x) x
 
+defaultLevel :: B.ByteString
+defaultLevel = B8.pack "undefined"
+defaultLimit :: Int
+defaultLimit = 2000000000 
+
 mavgUpdater :: YState -> IO ()
 mavgUpdater ystate = do
     threadDelay 1000000
     metrics <- readMVar (sMetrics ystate)
-    limits <- readMVar (sLimits ystate)
-    now <- getCurrentTime
+    limits  <- readMVar (sLimits  ystate)
+    levels  <- readMVar (sLevels  ystate)
+    now     <- getCurrentTime
     let mvStats = sStats ystate
     bumpStats now mvStats
     modifyMVar_ mvStats force'
     let ms = Map.toList metrics
-    mapM_ (\(k@(Key _ ep), m)  -> do
-        mavg <- readMVar (mMavg m)
-        (c, lvl) <- modifyMVar (mData m) (\(MData c lvl) -> return (MData 0 lvl, (c, lvl)))
+    forM_ ms $ \(k@(Key appkey ep), m) -> do
+        mavg    <- readMVar (mMavg m)
+        MData c <- swapMVar (mData m) (MData 0)
         let mavg' = bumpRate mavg now c
-        let ra = rateAverage mavg'
+            ra    = rateAverage mavg'
+            lvl   = Map.findWithDefault defaultLevel appkey levels
         modifyMVar_ (sOverLimits ystate) (\overLimits -> do
-            let limit = Map.findWithDefault 2000000000 (LKey lvl ep) limits
+            let limit = Map.findWithDefault defaultLimit (LKey lvl ep) limits
             if ra > limit
                 then do
                     let limit_l = fromIntegral limit :: Integer
-                    let ra_l = fromIntegral ra :: Integer
-                    let p = fromIntegral (1000000 * limit_l `div` ra_l)
-                    return $! Map.insert k (OverLimit ra p) overLimits
+                        ra_l    = fromIntegral ra :: Integer
+                        p       = throttlePrecision * limit_l `div` ra_l
+                        p_l     = fromIntegral p
+                    return $! Map.insert k (OverLimit ra p_l) overLimits
                 else return $! Map.delete k overLimits)
-        swapMVar (mMavg m) $! mavg') ms
+        swapMVar (mMavg m) $! mavg'
     mavgUpdater ystate
 
 handler :: (Handle -> Query -> IO ()) -> SockAddr -> Handle -> IO ()
@@ -131,9 +144,21 @@ handler qp sa h = do
         else readQuery h >>= qp h >> handler qp sa h
 
 processQuery :: Options -> YState -> Handle -> Query -> IO ()
+processQuery opts ystate h (UpdateMetricLevels qms) = do
+    let qlevels  = map (\(QMetricLevel key _ level _) -> QLevel key level) qms
+        qmetrics = map (\(QMetricLevel key endp _ count) -> QMetric key endp count) qms
+    processQuery opts ystate h (UpdateLevels qlevels)
+    processQuery opts ystate h (UpdateMetrics qmetrics)
+processQuery _opts ystate _h (UpdateLevels newlevels) = do
+    updateStats (sStats ystate) 1 0
+    let toInsert = [(key, level) | QLevel key level <- newlevels]
+    modifyMVar_ (sLevels ystate) $ \old -> 
+        return $! L.foldl' (flip $ uncurry Map.insert) old toInsert
 processQuery opts ystate _h (UpdateMetrics qms) = do
     updateStats (sStats ystate) 1 (length qms)
-    mapM_ (updateMetric (optSmoothing opts) (sMetrics ystate)) qms
+    let smooth = optSmoothing opts
+        metrics = sMetrics ystate
+    forM_ qms $ updateMetric smooth metrics
 processQuery _opts ystate h GetOverLimit = do
     updateStats (sStats ystate) 1 0
     let mvOverLimits = sOverLimits ystate
@@ -150,25 +175,25 @@ processQuery _opts ystate h GetStats = do
     formattedStats <- prepareStats ystate
     writeReply h $ ReplyText formattedStats
 processQuery _opts ystate _h Stop = putMVar (sExit ystate) 0
-processQuery _opts _ystate h _ =
-    writeReply h $ ReplyText "Unknown query"
+processQuery _opts _ystate h query =
+    writeReply h $ ReplyText $ "Unknown query: " ++ show query
 
 updateMetric :: Double -> MVar MetricsMap -> QMetric -> IO ()
-updateMetric smoothingWindow mvMetrics (QMetric key ep lvl cnt) = do
+updateMetric smoothingWindow mvMetrics (QMetric key ep cnt) = do
     let k = Key key ep
-    metric <- modifyMVar mvMetrics (\metrics ->
+    metric <- modifyMVar mvMetrics $ \metrics ->
         case Map.lookup k metrics of
             Just m -> return (metrics, m)
             Nothing -> do
                 m <- newMetric smoothingWindow
-                return (Map.insert k m metrics, m))
-    modifyMVar_ (mData metric) (\(MData c _) -> return $! MData (c + cnt) lvl)
+                return (Map.insert k m metrics, m)
+    modifyMVar_ (mData metric) $ \(MData c) -> return $! MData (c + cnt)
 
 newMetric :: Double -> IO Metric
 newMetric smoothingWindow = do
     mavg <- mavgNewIO smoothingWindow
     ma <- newMVar mavg
-    mc <- newMVar (MData 0 B.empty)
+    mc <- newMVar (MData 0)
     return $ Metric ma mc
 
 statsWindows :: [(Double, String)]
@@ -176,9 +201,9 @@ statsWindows = [(60.0, "min"), (300.0, "5min"), (3600.0, "hour"), (86400.0, "day
 
 initialStats :: IO (MVar Stats)
 initialStats = do
-    let mk = MavgAcc 0 <$> (mapM mavgNewIO $ map fst statsWindows)
+    let mk = MavgAcc 0 <$> mapM (mavgNewIO . fst) statsWindows
     connects <- mk
-    metrics <- mk
+    metrics  <- mk
     newMVar $ Stats connects metrics
 
 updateStats :: MVar Stats -> Int -> Int -> IO ()
@@ -222,10 +247,11 @@ runTelnetCmd ystate "l" = do
 runTelnetCmd ystate "showallmetrics" = do
     let u = text . B8.unpack
     lims' <- Map.toAscList <$> readMVar (sMetrics ystate)
-    lims <- mapM (\(Key key ep, Metric m d) -> do
+    levels <- readMVar $ sLevels ystate
+    lims <- forM lims' $ \(Key key ep, Metric m _d) -> do
                     mavg <- readMVar m
-                    MData _ lev <- readMVar d
-                    return (key, ep, lev, mavg)) lims'
+                    let level = Map.findWithDefault defaultLevel key levels
+                    return (key, ep, level, mavg)
     let doc = vcat [u key <> text "/" <> u ep <> text "/" <> u lev <> colon <+> int (rateAverage mavg)
                         | (key, ep, lev, mavg) <- lims]
     return $ render doc
@@ -254,7 +280,7 @@ prepareStats ystate = do
 prepareMetricStats :: YState -> IO Doc
 prepareMetricStats ystate = do
     metrics <- Map.toList <$> readMVar (sMetrics ystate)
-    docs <- mapM (\((Key k ep), Metric mvMavg _) -> do
+    docs <- mapM (\(Key k ep, Metric mvMavg _) -> do
             n <- rateAverage <$> readMVar mvMavg
             return $ constructMetricDoc k ep n
         ) metrics

@@ -25,12 +25,12 @@ runJob n job = do
     replicateM_ n $ job h
     hClose h
 
-metrics :: [QMetric]
-metrics = [QMetric (B8.pack $ "a@dev.washpost.com" ++ show x) (B8.pack "submit") (B8.pack "level1") 10 | x <- [1..]]
+metrics :: [QMetricLevel]
+metrics = [QMetricLevel (B8.pack $ "a@dev.washpost.com" ++ show x) (B8.pack "submit") (B8.pack "level1") 10 | x <- [1..]]
 
 updateMetrics :: Int -> Handle ->IO ()
 updateMetrics m h = do
-    let q = UpdateMetrics (take m metrics)
+    let q = UpdateMetricLevels (take m metrics)
     writeQuery h q
 
 updateLimits :: Handle -> IO ()

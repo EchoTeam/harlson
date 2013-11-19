@@ -8,30 +8,43 @@ import System.IO
 import Control.Monad
 import Control.Applicative
 
-data QMetric = QMetric { qmKey :: !B.ByteString
-                       , qmEndpoint :: !B.ByteString
-                       , qmLevel :: !B.ByteString
-                       , qmCount :: !Int
+-- BC
+data QMetricLevel = QMetricLevel { qmlKey   :: !B.ByteString
+                                 , qmlEndpoint :: !B.ByteString
+                                 , qmlLevel :: !B.ByteString
+                                 , qmlCount :: !Int
+                                 } deriving Show
+-- /BC
+
+data QMetric = QMetric { qmKey     :: !B.ByteString
+                       , qmEndoint :: !B.ByteString
+                       , qmCount   :: !Int
                        } deriving Show
 
-data QLimit = QLimit { qlLevel :: !B.ByteString
+data QLimit = QLimit { qlLevel    :: !B.ByteString
                      , qlEndpoint :: !B.ByteString
-                     , qlLimit :: !Int
+                     , qlLimit    :: !Int
                      } deriving Show
 
-data ROverLimit = ROverLimit { roKey :: !B.ByteString
+data QLevel = QLevel { qaKey   :: !B.ByteString
+                     , qaLevel :: !B.ByteString
+                     } deriving Show
+
+data ROverLimit = ROverLimit { roKey      :: !B.ByteString
                              , roEndpoint :: !B.ByteString
                              , roOverLimitChange :: !OverLimitChange
                              } deriving Show
 
-data OverLimitChange = OverLimitAdded { roValue :: !Int
+data OverLimitChange = OverLimitAdded { roValue    :: !Int
                                       , roThrottle :: !Int -- as a permille
                                       }
                      | OverLimitRemoved
                         deriving Show
 
 data Query = UpdateMetrics ![QMetric]
-           | UpdateLimits ![QLimit]
+           | UpdateLimits  ![QLimit]
+           | UpdateLevels  ![QLevel]
+           | UpdateMetricLevels ![QMetricLevel]
            | GetOverLimit
            | OverLimitUpdates
            | GetStats
@@ -45,21 +58,36 @@ data Reply = ReplyOverLimit ![ROverLimit]
            | ReplyUnknown
                 deriving Show
 
+throttlePrecision :: Integer
+throttlePrecision = 1000000 
+
 readQuery :: Handle -> IO Query
 readQuery h = do
     t <- B.hGet h 4
     readQueryByType h $ B8.unpack t
 
 writeQuery :: Handle -> Query -> IO ()
-writeQuery h (UpdateMetrics qmetrics) = do
+-- BC
+writeQuery h (UpdateMetricLevels qmetrics) = do
     B.hPut h $ B8.pack "UPME"
     B.hPut h $ Put.runPut $ Put.putWord32be $ fromIntegral $ length qmetrics
+    mapM_ (writeMetricLevel h) qmetrics
+    hFlush h
+-- /BC
+writeQuery h (UpdateMetrics qmetrics) = do
+    B.hPut   h $ B8.pack "UPMT"
+    writeInt h $ length qmetrics
     mapM_ (writeMetric h) qmetrics
     hFlush h
 writeQuery h (UpdateLimits qlimits) = do
-    B.hPut h $ B8.pack "UPLI"
-    B.hPut h $ Put.runPut $ Put.putWord32be $ fromIntegral $ length qlimits
+    B.hPut   h $ B8.pack "UPLI"
+    writeInt h $ length qlimits
     mapM_ (writeLimit h) qlimits
+    hFlush h
+writeQuery h (UpdateLevels qlevels) = do
+    B.hPut   h $ B8.pack "UPLE"
+    writeInt h $ length qlevels
+    -- todo
     hFlush h
 writeQuery h GetOverLimit = do
     B.hPut h $ B8.pack "GOVL"
@@ -104,12 +132,20 @@ writeReply h ReplyUnknown = do
     hFlush h
 
 readQueryByType :: Handle -> String -> IO Query
+-- BC
 readQueryByType h "UPME" = do
     len <- readInt h
-    UpdateMetrics <$> replicateM len (readMetric h)
+    UpdateMetricLevels <$> replicateM len (readMetricLevel h)
+-- /BC
 readQueryByType h "UPLI" = do
     len <- readInt h
     UpdateLimits <$> replicateM len (readLimit h)
+readQueryByType h "UPLE" = do
+    len <- readInt h
+    UpdateLevels <$> replicateM len (readLevel h)
+readQueryByType h "UPMT" = do
+    len <- readInt h
+    UpdateMetrics <$> replicateM len (readMetric h)
 readQueryByType _h "GOVL" = return GetOverLimit
 readQueryByType _h "OVLU" = return OverLimitUpdates
 readQueryByType _h "STAT" = return GetStats
@@ -128,30 +164,29 @@ readReplyByType h "RTEX" = do
     return $ ReplyText $ B8.unpack binText
 readReplyByType _h _ = return ReplyUnknown
 
+writeMetricLevel :: Handle -> QMetricLevel -> IO ()
+writeMetricLevel h (QMetricLevel key endpoint level count) = do
+    writeString h key
+    writeString h endpoint
+    writeString h level
+    writeInt    h count
+
 writeMetric :: Handle -> QMetric -> IO ()
-writeMetric h (QMetric key endpoint level count) = do
-    writeShort h $ B.length key
-    B.hPut h key
-    writeShort h $ B.length endpoint
-    B.hPut h endpoint
-    writeShort h $ B.length level
-    B.hPut h level
-    writeInt h count
+writeMetric h (QMetric key endpoint count) = do
+    writeString h key
+    writeString h endpoint
+    writeInt    h count
 
 writeLimit :: Handle -> QLimit -> IO ()
 writeLimit h (QLimit level endpoint limit) = do
-    writeShort h $ B.length level
-    B.hPut h level
-    writeShort h $ B.length endpoint
-    B.hPut h endpoint
-    writeInt h limit
+    writeString h level
+    writeString h endpoint
+    writeInt    h limit
 
 writeOverLimit :: Handle -> ROverLimit -> IO ()
 writeOverLimit h (ROverLimit key endpoint change) = do
-    writeShort h $ B.length key
-    B.hPut h key
-    writeShort h $ B.length endpoint
-    B.hPut h endpoint
+    writeString h key
+    writeString h endpoint
     case change of
         OverLimitAdded value throttle -> do
             writeShort h (0 :: Int)
@@ -160,32 +195,17 @@ writeOverLimit h (ROverLimit key endpoint change) = do
         OverLimitRemoved ->
             writeShort h (1 :: Int)
 
-readMetric :: Handle -> IO QMetric
-readMetric h = do
-    keyLen <- readShort h
-    key <- B.hGet h keyLen
-    epLen <- readShort h
-    endpoint <- B.hGet h epLen
-    lvlLen <- readShort h
-    level <- B.hGet h lvlLen
-    count <- readInt h
-    return $ QMetric key endpoint level count
+readMetricLevel :: Handle -> IO QMetricLevel
+readMetricLevel h = 
+    QMetricLevel <$> readString h <*> readString h <*> readString h <*> readInt h
 
 readLimit :: Handle -> IO QLimit
-readLimit h = do
-    lvlLen <- readShort h
-    level <- B.hGet h lvlLen
-    epLen <- readShort h
-    endpoint <- B.hGet h epLen
-    limit <- readInt h
-    return $ QLimit level endpoint limit
+readLimit h =
+    QLimit <$> readString h <*> readString h <*> readInt h
 
 readOverLimit :: Handle -> IO ROverLimit
 readOverLimit h = do
-    keyLen <- readShort h
-    key <- B.hGet h keyLen
-    epLen <- readShort h
-    endpoint <- B.hGet h epLen
+    overlimit <- ROverLimit <$> readString h <*> readString h
     changeType <- readShort h
     change <- case changeType of
                 0 -> do
@@ -193,7 +213,15 @@ readOverLimit h = do
                     throttle <- readInt h
                     return $ OverLimitAdded value throttle
                 _ -> return OverLimitRemoved
-    return $ ROverLimit key endpoint change
+    return $! overlimit change
+
+readMetric :: Handle -> IO QMetric
+readMetric h = 
+    QMetric <$> readString h <*> readString h <*> readInt h
+
+readLevel :: Handle -> IO QLevel
+readLevel h =
+    QLevel <$> readString h <*> readString h
 
 readInt :: Handle -> IO Int
 readInt h = do
@@ -205,6 +233,9 @@ readShort h = do
     lenBin <- B.hGet h 1
     return $ fromIntegral $ Get.runGet Get.getWord8 lenBin
 
+readString :: Handle -> IO B.ByteString
+readString h = readShort h >>= B.hGet h
+
 writeInt :: (Integral a) => Handle -> a -> IO ()
 writeInt h n = do
     let bin = Put.runPut $ Put.putWord32be $ fromIntegral n
@@ -214,3 +245,9 @@ writeShort :: (Integral a) => Handle -> a -> IO ()
 writeShort h n = do
     let bin = Put.runPut $ Put.putWord8 $ fromIntegral n
     B.hPut h bin
+
+writeString :: Handle -> B.ByteString -> IO ()
+writeString h s = do
+    writeShort h $ B.length s
+    B.hPut h s
+
