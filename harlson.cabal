@@ -11,11 +11,14 @@ Cabal-version:       >= 1.2
 
 Executable harlson
     Main-is:             Main.hs
-    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, containers >= 0.5.0.0, binary, bytestring, pretty, deepseq
+    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, 
+                         containers >= 0.5.0.0, binary, bytestring, pretty, deepseq,
+                         regex-compat
     ghc-options:         -O3 -threaded -rtsopts -auto-all -Wall -fno-warn-unused-do-bind
 
 Executable perf-harlson
     Main-is:             Perftest.hs
-    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, containers >= 0.5.0.0, binary, bytestring
+    Build-Depends:       base >= 4.3, network >= 2.3.1.0, time >= 1.2.0.3, 
+                         containers >= 0.5.0.0, binary, bytestring
     ghc-options:         -O3 -threaded -rtsopts
 
