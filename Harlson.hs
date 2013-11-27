@@ -302,9 +302,14 @@ prepareStats ystate = do
 prepareMetricStats :: YState -> IO Doc
 prepareMetricStats ystate = do
     metrics <- Map.toList <$> readMVar (sMetrics ystate)
+    levels <- readMVar $ sLevels ystate
+    limits <- readMVar $ sLimits ystate
     docs <- mapM (\(Key k ep, Metric mvMavg _) -> do
             n <- rateAverage <$> readMVar mvMavg
-            return $ constructMetricDoc k ep n
+            let lvl = Map.findWithDefault defaultLevel k levels
+                lim = Map.findWithDefault defaultLimit (LKey lvl ep) limits
+            return $ vcat [constructMetricDoc k ep nm v
+                            | (nm, v) <- [("metrics", n), ("limits", lim)]]
         ) metrics
     return $ vcat docs
 
@@ -332,9 +337,10 @@ prepareHarlsonStats ystate = do
                                        , (sz sOverLimits, "overlimits")]
     return $ doc1 $$ doc2
 
-constructMetricDoc :: B8.ByteString -> B8.ByteString -> Int -> Doc
-constructMetricDoc k ep n =
-    text "rls.metrics." <> u k <> text "." <> u ep <> semi <> int n where
+constructMetricDoc :: B8.ByteString -> B8.ByteString -> String -> Int -> Doc
+constructMetricDoc k ep name n =
+    t "rls." <> t name <> t "." <> u k <> t "." <> u ep <> semi <> int n where
+        t = text
         u = text . safeString . B8.unpack
         safeString = map r
         r c = if isAlphaNum c then c else '_'
